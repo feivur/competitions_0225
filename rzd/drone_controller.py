@@ -1,16 +1,18 @@
 from typing import List, Tuple, Dict, Optional
 from pion import Pion
-import time
-import cv2
-import numpy as np
 from pyzbar.pyzbar import decode
 import math
+import threading
+from typing import Union, Optional
 # Импорт необходимых функций из модуля pion.functions
 from pion.functions import vector_reached, update_array
+import cv2
+import numpy as np
+from .drone_cv import *
+import time
 
-# ------------------ Вспомогательные функции ------------------
 
-def calculate_shift_global(points: np.ndarray, 
+def calculate_shift_global(points: np.ndarray,
                            frame_center: Tuple[int, int],
                            yaw: float,
                            altitude: float) -> List[float]:
@@ -38,12 +40,42 @@ def calculate_shift_global(points: np.ndarray,
     corrected_y = shift_x_m * math.sin(yaw) + shift_y_m * math.cos(yaw)
     return [corrected_x, corrected_y]
 
+def detect_qr_global_from_frame(drone: Pion,
+                                frame: np.ndarray,
+                                finished_targets: List[str],
+                                frame_center: Tuple[int, int],
+                                coordinates_or_error: bool = True
+                                ) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
+    """
+    Аналог функции detect_qr_global, но получает уже готовый кадр.
+    """
+    key_errors: Dict[str, np.ndarray] = {}
+    data = decode(frame)
+    if data:
+        for item in data:
+            decoded_key = item[0].decode()
+            if decoded_key not in finished_targets:
+                drone.led_control(255, 0, 255, 0)
+                points = np.array(item[3])
+                shift = calculate_shift_global(points, frame_center, drone.yaw, drone.position[2])
+                if shift:
+                    if coordinates_or_error:
+                        error = np.array([-shift[0], shift[1], 0, 0])
+                    else:
+                        error = np.array([-shift[0] + drone.xyz[0],
+                                          shift[1] + drone.xyz[1], 0, 0])
+                    key_errors[decoded_key] = error
+                    print(f"Обнаружен: {decoded_key} = {error}")
+                drone.led_control(255, 0, 0, 0)
+    return key_errors, frame
+
+
 def detect_qr_global(drone: Pion,
-                     cap: cv2.VideoCapture, 
+                     cap: cv2.VideoCapture,
                      finished_targets: List[str],
-                     frame_center: Tuple[int, int], 
+                     frame_center: Tuple[int, int],
                      coordinates_or_error: bool = True
-                    ) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
+                     ) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
     """
     Считывает кадр из видеопотока, ищет QR-коды и вычисляет error-вектор. Если coordinates_or_error=True,
     возвращается вектор смещения относительно дрона; иначе вектор суммируется с координатами дрона для получения
@@ -87,13 +119,13 @@ def detect_qr_global(drone: Pion,
                 drone.led_control(255, 0, 0, 0)
     return key_errors, frame
 
+
 def move_to_target(drone: Pion,
-                   cap: cv2.VideoCapture,
-                   frame_center: Tuple[int, int],
+                   camera: Union[RTSPCamera, SocketCamera, BaseCamera],
                    finished_targets: List[str],
                    show: bool = False,
                    key: str = '4',
-                   scaling_factor: float = 0.5, 
+                   scaling_factor: float = 0.5,
                    threshold: float = 0.05,
                    time_break: float = float('inf')
                    ) -> Tuple[List[str], np.ndarray]:
@@ -102,23 +134,21 @@ def move_to_target(drone: Pion,
 
     :param drone: Объект дрона.
     :type drone: Pion
-    :param cap: Объект VideoCapture.
-    :type cap: cv2.VideoCapture
-    :param frame_center: Центр кадра (ширина, высота).
-    :type frame_center: Tuple[int, int]
-    :param finished_targets: Список уже обработанных QR-кодов.
+    :param  camera: Объект Union[RTSPCamera, SocketCamera]
+    :type camera: Union[RTSPCamera, SocketCamera]
+    :param finished_targets: Список уже обработанных QR-кодов
     :type finished_targets: List[str]
-    :param show: Флаг отображения видеопотока.
+    :param show: Флаг отображения видеопотока
     :type show: bool
-    :param key: Ключ (название) QR-кода, по которому корректируется позиция.
+    :param key: Ключ (название) QR-кода, по которому корректируется позиция
     :type key: str
-    :param scaling_factor: Коэффициент масштабирования корректирующей скорости.
+    :param scaling_factor: Коэффициент масштабирования корректирующей скорости
     :type scaling_factor: float
-    :param threshold: Порог точности для завершения корректировки (в метрах).
+    :param threshold: Порог точности для завершения корректировки (в метрах)
     :type threshold: float
-    :param time_break: Максимальное время работы корректировки.
+    :param time_break: Максимальное время работы корректировки
     :type time_break: float
-    :return: Кортеж (обновлённый список finished_targets, конечные координаты дрона).
+    :return: Кортеж (обновлённый список finished_targets, конечные координаты дрона)
     :rtype: Tuple[List[str], np.ndarray]
     """
     errors = np.zeros((10, 4))
@@ -128,7 +158,14 @@ def move_to_target(drone: Pion,
     while not flag_reach_zero_error:
         if time.time() - t_0 > time_break:
             break
-        key_errors, frame = detect_qr_global(drone, cap, finished_targets, frame_center)
+        frame = camera.get_cv_frame()
+        if frame is None:
+            continue
+        # Вычисляем центр кадра на основе полученных размеров
+        height, width, _ = frame.shape
+        frame_center = (width // 2, height // 2)
+        # Используем функцию, которая принимает уже полученный кадр
+        key_errors, frame = detect_qr_global_from_frame(drone, frame, finished_targets, frame_center)
         print("key_errors =", key_errors)
         if key in key_errors:
             if show:
@@ -145,7 +182,6 @@ def move_to_target(drone: Pion,
     final_coordinate = drone.xyz.copy()
     return finished_targets, final_coordinate
 
-# ------------------ Класс DroneScanner ------------------
 
 class DroneScanner:
     """
@@ -155,44 +191,32 @@ class DroneScanner:
     """
     FOCAL_LENGTH: int = 700
 
-    def __init__(self, drone: Pion, base_coords: np.ndarray, scan_points: np.ndarray, show: bool = False) -> None:
+    def __init__(self, drone: Pion, base_coords: np.ndarray, scan_points: np.ndarray,
+                 camera: BaseCamera, show: bool = False) -> None:
         """
-        Инициализирует дрона-сканер.
-
         :param drone: Объект дрона.
-        :type drone: Pion
         :param base_coords: Координаты базы (точка возврата).
-        :type base_coords: np.ndarray
         :param scan_points: Массив точек для обхода (каждая точка – кортеж (x, y, z, yaw)).
-        :type scan_points: np.ndarray
+        :param camera: Экземпляр камеры, реализующий BaseCamera.
         :param show: Флаг отображения видеопотока.
-        :type show: bool
-        :return: None
         """
         self.show = show
         self.drone: Pion = drone
         self.base_coords: np.ndarray = base_coords
         self.scan_points: np.ndarray = scan_points
         self.unique_points: Dict[str, List[np.ndarray]] = {}  # Накопление QR-кодов
-        self.rtsp_url: str = f'rtsp://{self.drone.ip}:8554/front'
-        self.cap: cv2.VideoCapture = cv2.VideoCapture(self.rtsp_url)
-        self.initialize_drone()
+        self.camera = camera  # Используем универсальную камеру вместо VideoCapture
 
     def initialize_drone(self) -> None:
         """
         Инициализирует дрона: выполняет арминг, взлёт и устанавливает режим скорости.
-        
-        :return: None
         """
-        time.sleep(1)
         self.smart_take_off()
         time.sleep(7)
-        self.drone.set_v()
 
     def smart_take_off(self) -> None:
         """
-        Функция для принудительного взлета.
-        Использовать с осторожностью!!!
+        Функция для принудительного взлёта.
         """
         print("Smart take off is beginning")
         while self.drone.xyz[2] < 0.3:
@@ -203,78 +227,80 @@ class DroneScanner:
         time.sleep(7)
         print("Smart take off is ending")
 
-    def detect_qr(self,
-                  cap: cv2.VideoCapture, 
-                  frame_center: Tuple[int, int],
-                  finished_targets: Optional[List[str]] = None,
-                  coordinates_or_error: bool = True
-                 ) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
+    def detect_qr(self, finished_targets: Optional[List[str]] = None,
+                  coordinates_or_error: bool = True) -> Tuple[
+        Dict[str, np.ndarray], Optional[np.ndarray], Tuple[int, int]]:
         """
-        Обёртка для функции detect_qr_global.
-
-        :param cap: Объект VideoCapture.
-        :type cap: cv2.VideoCapture
-        :param frame_center: Центр кадра.
-        :type frame_center: Tuple[int, int]
-        :param finished_targets: Список уже обработанных QR-кодов.
-        :type finished_targets: Optional[List[str]]
-        :param coordinates_or_error: Флаг выбора типа возвращаемых координат.
-        :type coordinates_or_error: bool
-        :return: Кортеж (словарь обнаруженных QR, считанный кадр).
-        :rtype: Tuple[Dict[str, np.ndarray], np.ndarray]
+        Получает кадр с камеры, вычисляет центр и ищет QR-коды.
         """
-        return detect_qr_global(self.drone, cap, finished_targets or [], frame_center, coordinates_or_error)
+        frame = self.camera.get_cv_frame()
+        if frame is None:
+            print("Не удалось получить кадр")
+            return {}, None, (0, 0)
+        height, width, _ = frame.shape
+        frame_center = (width // 2, height // 2)
+        key_errors, frame = detect_qr_global_from_frame(self.drone, frame, finished_targets or [], frame_center,
+                                                        coordinates_or_error)
+        return key_errors, frame, frame_center
 
     def process_mission_point(self,
                               target_point: Tuple[float, float],
-                              show: bool = False
+                              show: bool = False,
+                              emergency_event: threading.Event = None
                               ) -> None:
         """
         Перемещает дрона-сканер к заданной точке и собирает обнаруженные QR-коды.
-
-        :param target_point: Целевая точка (x, y) для обхода.
-        :type target_point: Tuple[float, float]
-        :param show: Флаг отображения видеопотока.
-        :type show: bool
-        :return: None
+        При возникновении экстренной ситуации дрон возвращается на базу, ждёт нормализации и затем возобновляет миссию.
         """
         finished_targets = list(self.unique_points.keys())
-        frame_center = (int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)) // 2,
-                        int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) // 2)
         self.drone.speed_flag = False
         while True:
+            # Обработка экстренной ситуации
+            if emergency_event and emergency_event.is_set():
+                current_position = self.drone.xyz.copy()
+                print("[Emergency] Обнаружена экстренная ситуация! Приостанавливаю миссию.")
+                self.return_to_base()
+                while emergency_event.is_set():
+                    print("[Emergency] Жду нормализации погоды...")
+                    time.sleep(1)
+                print("[Emergency] Погода нормализовалась. Возобновляю миссию.")
+                self.smart_take_off()
+                self.drone.goto_from_outside(*current_position, 0)
+
             if self.drone.xyz[1] > target_point[1]:
                 break
-            vector_speed = (np.array(target_point) - self.drone.xyz[:2])
+
+            vector_speed = np.array(target_point) - self.drone.xyz[:2]
             vector_length = np.linalg.norm(vector_speed)
             if vector_length > 0:
-                vector_speed = vector_speed / vector_length * 0.1
+                vector_speed = (vector_speed / vector_length) * 0.1
                 self.drone.send_speed(vector_speed[0], vector_speed[1], 0, 0)
-            key_errors, frame = #.........  Пропущенная часть кода          
+
+            key_errors, frame, _ = self.detect_qr(finished_targets, coordinates_or_error=False)
             for key, error in key_errors.items():
                 self.unique_points.setdefault(key, []).append(error)
                 finished_targets.append(key)
-            if self.show:
+
+            if self.show and frame is not None:
                 cv2.imshow(f'Drone Scanner {self.drone.ip}', frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
         self.drone.speed_flag = False
 
-    def execute_scan(self) -> Dict[str, np.ndarray]:
+    def execute_scan(self, emergency_event: threading.Event) -> Dict[str, np.ndarray]:
         """
-        Выполняет миссию сканирования: дрон перемещается по заданным точкам,
-        собирает QR-коды и возвращается на базу. Итоговые координаты для каждого QR усредняются.
-
-        :return: Словарь обнаруженных QR-кодов с усредненными координатами.
-        :rtype: Dict[str, np.ndarray]
+        Выполняет миссию сканирования: дрон перемещается по заданным точкам, собирает QR-коды и возвращается на базу.
         """
+        self.initialize_drone()
+        self.drone.goto_from_outside(*self.scan_points[0])
+        self.drone.speed_flag = False
+        for point in self.scan_points[1:]:
+            pass
         # Миссию сканирования вы должны придумать сами
         pass
     def return_to_base(self) -> None:
         """
         Возвращает дрона-сканер на базу.
-        
-        :return: None
         """
         print(f"\n\nReturn to base: {self.base_coords}\n\n")
         self.drone.set_v()
@@ -303,46 +329,45 @@ class DroneDeliverer:
     после чего для каждой найденной цели выполняется корректировка позиции с помощью камеры,
     приземление с уточнением и возврат на базу.
     """
+
     def __init__(self,
-                 drone: Pion, 
+                 drone: Pion,
                  base_coords: np.ndarray,
                  delivery_points: List[Tuple[float, float, float, float]],
+                 camera: Optional[BaseCamera] = None,
                  mission_keys: Optional[List[str]] = None,
                  show: bool = False) -> None:
         """
-        Инициализирует дрона-доставщика.
-
         :param drone: Объект дрона для доставки.
-        :type drone: Pion
         :param base_coords: Координаты базы (точка возврата).
-        :type base_coords: np.ndarray
         :param delivery_points: Список точек для кандидатов (x, y, z, yaw).
-        :type delivery_points: List[Tuple[float, float, float, float]]
+        :param camera: Экземпляр камеры для видеопотока. Если не передан, будет создан RTSPCamera по умолчанию.
         :param mission_keys: Список QR-кодов, для которых необходимо выполнить доставку.
-        :type mission_keys: Optional[List[str]]
-        :return: None
+        :param show: Флаг отображения видеопотока.
         """
         self.drone: Pion = drone
         self.base_coords: np.ndarray = base_coords
         self.show = show
         self.delivery_points: List[Tuple[float, float, float, float]] = delivery_points
         self.mission_keys: List[str] = mission_keys if mission_keys is not None else []
-        self.initialize_drone()
+        # Если камера не передана, создаём камеру по умолчанию по RTSP
+        if camera is None:
+            rtsp_url = f'rtsp://{self.drone.ip}:8554/front'
+            self.camera = RTSPCamera(rtsp_url)
+        else:
+            self.camera = camera
 
     def initialize_drone(self) -> None:
         """
         Инициализирует дрона-доставщика: арминг, взлёт и установка скорости.
-        
-        :return: None
         """
         time.sleep(1)
         self.smart_take_off()
-        self.drone.set_v()
+        time.sleep(7)
 
     def smart_take_off(self) -> None:
         """
-        Функция для принудительного взлета.
-        Использовать с осторожностью!!!
+        Функция для принудительного взлёта.
         """
         print("Smart take off is beginning")
         while self.drone.xyz[2] < 0.3:
@@ -378,8 +403,6 @@ class DroneDeliverer:
         :rtype: np.ndarray
         """
         final_coord: Optional[np.ndarray] = None
-        # Формируем список candidate точек: сначала используем найденную координату (с принудительной высотой 1.7),
-        # затем перебираем дополнительные точки из delivery_points.
         candidate_points: List[Tuple[float, float, float, float]] = [(target_coord[0], target_coord[1], 1.7, 0)]
         candidate_points.extend(self.delivery_points)
         for point in candidate_points:
@@ -391,19 +414,18 @@ class DroneDeliverer:
             self.drone.goto_from_outside(*point)
             self.drone.speed_flag = False
             time.sleep(2)
-            rtsp_url = f'rtsp://{self.drone.ip}:8554/front'
-            cap = cv2.VideoCapture(rtsp_url)
-            if not cap.isOpened():
-                print(f"Не удалось открыть видеопоток для '{target_key}' на точке {point}")
-                continue
-            frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            print("Размеры видеопотока:", frame_height, frame_width)
-            frame_center = (frame_width // 2, frame_height // 2)
+            # Используем универсальную камеру для получения кадра
             finished_targets: List[str] = []
-            finished_targets, final_coord = # Пропущенная часть кода
-            cap.release()
-            cv2.destroyAllWindows()
+            frame = self.camera.get_cv_frame()
+            if frame is not None:
+                height, width, _ = frame.shape
+                frame_center = (width // 2, height // 2)
+            else:
+                frame_center = (0, 0)
+            finished_targets, final_coord = move_to_target(self.drone, self.camera, finished_targets,
+                                                           show=self.show, key=target_key,
+                                                           scaling_factor=scaling_factor,
+                                                           threshold=threshold, time_break=15)
             print(f"Для '{target_key}' получены координаты: {final_coord}")
             self.drone.land()
             time.sleep(30)
@@ -471,3 +493,88 @@ class DroneDeliverer:
         time.sleep(20)
 
 
+
+
+
+
+class MissionController:
+    def __init__(self, scanner: DroneScanner, deliverer: DroneDeliverer,
+                 coordinates_of_bases: dict, targets: list):
+        """
+        :param scanner: Экземпляр DroneScanner для сканирования QR-кодов.
+        :param deliverer: Экземпляр DroneDeliverer для выполнения доставки.
+        :param coordinates_of_bases: Словарь точек возврата для каждой цели.
+        :param targets: Список имен QR-кодов (целей), которые необходимо обработать.
+        """
+        self.scanner = scanner
+        self.deliverer = deliverer
+        self.coordinates_of_bases = coordinates_of_bases
+        self.targets = targets
+        self.emergency_event = threading.Event()  # Флаг экстренной ситуации
+        self.weather_thread = threading.Thread(target=self.weather_monitor, daemon=True)
+
+    def weather_monitor(self):
+        """
+        Имитирует изменение погодных условий:
+          - 0–2 минуты: зеленая погода (все в норме);
+          - 2–3 минуты: желтая погода (предупреждение: через минуту ураган);
+          - 3–4 минуты: красная погода (экстренная ситуация – флаг устанавливается).
+        После 4-й минуты, если флаг был установлен, он сбрасывается (погода нормализуется).
+        """
+        mission_start = time.time()
+        while True:
+            elapsed = time.time() - mission_start
+            if elapsed < 120 / 2:
+                print("[Weather Monitor] Погода: зеленая – всё в норме.")
+            elif elapsed < 180 / 2:
+                print("[Weather Monitor] Погода: желтая – через минуту будет ураган! Инициирую экстренный возврат.")
+                if not self.emergency_event.is_set():
+                    self.emergency_event.set()
+            elif elapsed < 240 / 2:
+                print("[Weather Monitor] Погода: красная – ураган! Сидим!.")
+            elif elapsed < 300 / 2:
+                print("[Weather Monitor] Погода: красная – ураган! Сидим!.")
+                if self.emergency_event.is_set():
+                    self.emergency_event.clear()
+                    print("[Weather Monitor] Погода нормализовалась. Экстренный режим завершён.")
+            else:
+                if self.emergency_event.is_set():
+                    self.emergency_event.clear()
+                    print("[Weather Monitor] Погода нормализовалась. Экстренный режим завершён.")
+                break
+            time.sleep(10)
+
+    def run_mission(self):
+        """
+        Основной метод выполнения миссии:
+          1. Запускается мониторинг погодных условий.
+          2. Выполняется сканирование QR-кодов.
+          3. Отбираются целевые коды.
+          4. Запускается доставка для найденных целей. В каждом этапе доставки проверяется,
+             установлен ли флаг экстренной ситуации. Если да, выполняется процедура приостановки:
+             дрон возвращается на базу, ждет нормализации и затем возобновляет миссию с сохраненной точки.
+          5. По завершении миссии дрон возвращается на базу.
+        """
+        # Запуск мониторинга погоды в отдельном потоке
+        self.weather_thread.start()
+
+        # Выполнение сканирования
+        self.scanner.initialize_drone()  # это мы просто взлетаем
+        scanned_results = self.scanner.execute_scan(self.emergency_event)
+        print("Результаты сканирования:", scanned_results)
+        self.scanner.return_to_base()
+        # Отбор только тех целей, которые указаны в self.targets
+        matched_targets = {k: v for k, v in scanned_results.items() if k in self.targets}
+        if not matched_targets:
+            print("Целевые QR-коды не обнаружены. Завершаем миссию.")
+            return
+
+        # Передаём флаг экстренной ситуации в объект доставщика (если требуется)
+        self.deliverer.emergency_event = self.emergency_event
+        self.deliverer.initialize_drone()
+        # Выполнение доставки с учетом возможного экстренного возврата
+        delivered_results = self.deliverer.deliver_all(matched_targets, self.coordinates_of_bases)
+        print("Итоговые доставленные координаты:", delivered_results)
+
+        # Завершение миссии – возврат на базу
+        # тут пропущен возврат на базу дрона

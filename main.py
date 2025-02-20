@@ -1,50 +1,33 @@
 from typing import List, Tuple, Dict, Optional
 from pion import Pion
 import numpy as np
-from rzd import *
+from rzd.drone_controller import *
 import sys
 
-
-def main() -> None:
-    """
-    Основная функция. Сначала создается объект DroneScanner для сканирования QR-кодов.
-    После сканирования результат (словарь QR-кодов с координатами) передается объекту DroneDeliverer,
-    который выполняет доставку для каждой найденной цели.
-    
-    :return: None
-    """
+if __name__ == "__main__":
     # Параметры для дрона-сканера
     scout_drone = Pion(
-        ip="10.1.100.215",
+        ip="10.1.100.217",
         mavlink_port=5656,
         logger=False,
         dt=0.0,
-        accuracy=0.08, # Точность позиционирования при goto_from_outside()
-        count_of_checking_points=5 # Количество точек, которым проверяется отклонение accuracy
+        accuracy=0.08,
+        count_of_checking_points=5
     )
-    base_coords = np.array([0, 0, 0, 0])
+    # Координаты базы
+    base_coords_scanner = np.array([3.4, 2.4, 1.0, 0])
+    # По каким координатам мы пройдемся для сканирования
     scan_points = np.array([
         [0, 0, 0, 0],
         [0, 0, 0, 0],
         [0, 0, 0, 0]
     ])
-    
-    # Список целевых QR-кодов, которые необходимо найти
-    targets: List[str] = ["Box 2 2", "Box 2 1"]
-    # Точки возврата для каждой цели (например, где должен приземлиться дрон после доставки)
-    coordinates_of_bases = {targets[0]: np.array([0, 0, 0, 0]), targets[1]: np.array([0, 0, 0, 0])}
+    # Выбираем режим камеры: для симулятора можно использовать SocketCamera,
+    # для реального дрона – RTSPCamera. Здесь пример с RTSP.
+    scanner_camera = RTSPCamera(rtsp_url=f'rtsp://{scout_drone.ip}:8554/front')
+    scanner = DroneScanner(drone=scout_drone, base_coords=base_coords_scanner,
+                           scan_points=scan_points, camera=scanner_camera, show=True)
 
-    # Создаем сканирующий дрон и выполняем сканирование
-    scanner = DroneScanner(drone=scout_drone, base_coords=base_coords, scan_points=scan_points, show=True)
-    scanned_results = scanner.execute_scan()
-    print("Результаты сканирования (усредненные координаты):", scanned_results)
-    
-    # Отбираем только те QR-коды, которые входят в список targets
-    matched_targets = {k: v for k, v in scanned_results.items() if k in targets}
-    if not matched_targets:
-        print("Целевые QR-коды не обнаружены. Завершаем работу.")
-        return
-    
     # Параметры для дрона-доставщика
     delivery_drone = Pion(
         ip="10.1.100.211",
@@ -54,22 +37,28 @@ def main() -> None:
         accuracy=0.08,
         count_of_checking_points=5
     )
+    base_coords_deliverer = np.array([3.5, 3.3, 1.5, 0])
+
+
     delivery_points: List[Tuple[float, float, float, float]] = [
         (0, 0, 0, 0),
         (0, 0, 0, 0),
         (0, 0, 0, 0)
     ]
-    
-    # Создаем дрона-доставщика и выполняем доставку для найденных QR-кодов
-    deliverer = DroneDeliverer(drone=delivery_drone, 
-                                base_coords=np.array([0, 0, 0, 0]),
-                                delivery_points=delivery_points,
-                                mission_keys=targets,
-                                show=True)
-    delivered_results = deliverer.deliver_all(matched_targets, coordinates_of_bases=coordinates_of_bases)
-    print("Итоговые доставленные координаты:", delivered_results)
-    deliverer.return_to_base()
+    # Для доставщика также можно передать камеру; если не передана, будет создан RTSPCamera по умолчанию.
+    deliverer_camera = RTSPCamera(rtsp_url=f'rtsp://{delivery_drone.ip}:8554/front')
+    deliverer = DroneDeliverer(drone=delivery_drone, base_coords=base_coords_deliverer,
+                               delivery_points=delivery_points, camera=deliverer_camera,
+                               mission_keys=["Box 2 2", "Box 2 1"], show=True)
 
-if __name__ == "__main__":
-    main()
+    # Координаты точек возврата для каждой цели
+    coordinates_of_bases = {
+        "Box 2 2": np.array([-3.2, -0.6, 1.5, 0]),
+        "Box 2 1": np.array([0.8, 3, 1.5, 0])
+    }
+    # Список целевых QR-кодов
+    targets = ["Box 2 2", "Box 2 1"]
 
+    # Создание MissionController и запуск миссии
+    mission_controller = MissionController(scanner, deliverer, coordinates_of_bases, targets)
+    mission_controller.run_mission()
