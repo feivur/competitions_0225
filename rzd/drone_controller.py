@@ -10,6 +10,68 @@ import cv2
 import numpy as np
 from .drone_cv import *
 import time
+import requests
+
+#Для РТС
+import multiprocessing
+from omegabot_poligon77 import * #Необходимо утсановить пакет из README
+from RTS_code import *
+
+def detect_object(drone: Pion, detect_code: str) -> None:
+    """
+    Функция вызывается, если вы задетектировали detect_code при сканировании или при доставке
+    
+    :param drone: объект дрона
+    :type drone: Pion
+
+    :param detect_code: Строка со значением из qr кода
+    :type detect_code: str
+
+    :rtype: None
+    """
+    print("detect_object(), ip: ", drone.ip, "detect_code: ", detect_code)
+    try:
+        requests.get("http://10.1.100.6:31556/detect_object",
+                     params={
+                         "object": f"{detect_code.replace(" ", "_")}",
+                         "host": drone.ip[-3:]
+                     }).text
+    except:
+        print("Геймкор выключен")
+
+
+def get_box(drone: Pion) -> None:
+    """
+    Функция вызывается, если вы сели на qr код (для дрона доставщика)
+    
+    :param drone: объект дрона
+    :type drone: Pion
+
+    :rtype: None
+    """
+    print("get_box(), ip: ", drone.ip)
+    try:
+        requests.get("http://10.1.100.6:31556/get_box",
+                 params={"host": drone.ip[-3:]}).text
+    except:
+        print("Геймкор выключен")
+
+
+def drop_box(drone: Pion) -> None:
+    """
+    Функция вызывается, если вы сбрасываете груз
+    
+    :param drone: объект дрона
+    :type drone: Pion
+
+    :rtype: None
+    """
+    print("drop_box(), ip: ", drone.ip) 
+    try:
+        requests.get("http://10.1.100.6:31556/drop_object",
+                 params={"host": drone.ip[-3:]}).text
+    except:
+        print("Геймкор выключен")
 
 
 def calculate_shift_global(points: np.ndarray,
@@ -65,6 +127,7 @@ def detect_qr_global_from_frame(drone: Pion,
                         error = np.array([-shift[0] + drone.xyz[0],
                                           shift[1] + drone.xyz[1], 0, 0])
                     key_errors[decoded_key] = error
+                    detect_object(drone=drone, detect_code=decoded_key)
                     print(f"Обнаружен: {decoded_key} = {error}")
                 drone.led_control(255, 0, 0, 0)
     return key_errors, frame
@@ -181,6 +244,7 @@ def move_to_target(drone: Pion,
     finished_targets.append(key)
     final_coordinate = drone.xyz.copy()
     return finished_targets, final_coordinate
+
 
 
 class DroneScanner:
@@ -313,7 +377,7 @@ class DroneScanner:
     def scanned_qr(self) -> Dict[str, np.ndarray]:
         """
         Возвращает усреднённые координаты всех обнаруженных QR-кодов.
-        
+
         :return: Словарь, где ключ – код, значение – усреднённая координата.
         :rtype: Dict[str, np.ndarray]
         """
@@ -428,7 +492,9 @@ class DroneDeliverer:
                                                            threshold=threshold, time_break=15)
             print(f"Для '{target_key}' получены координаты: {final_coord}")
             self.drone.land()
-            time.sleep(30)
+            time.sleep(15)
+            get_box(drone=self.drone)
+            time.sleep(15)
             self.smart_take_off()
             if final_coord is not None:
                 break
@@ -449,7 +515,7 @@ class DroneDeliverer:
         """
         Для каждого QR-кода из словаря целей выполняется доставка:
         дрон уточняет позицию, приземляется с корректировкой и возвращается на базу.
-        
+
         :param targets: Словарь QR-кодов с исходными координатами, полученными сканером.
         :type targets: Dict[str, np.ndarray]
         :param coordinates_of_bases: Словарь с точками возврата для каждой цели.
@@ -468,7 +534,7 @@ class DroneDeliverer:
     def return_to_base(self) -> None:
         """
         Возвращает дрона-доставщика на базу.
-        
+
         :return: None
         """
         print(f"\n\nReturn to base: {self.base_coords}\n\n")
@@ -481,7 +547,7 @@ class DroneDeliverer:
     def return_to_point(self, point: np.ndarray) -> None:
         """
         Возвращает дрона-доставщика на заданную точку.
-        
+
         :param point: Таргетная точка возврата (x, y, z, yaw).
         :type point: np.ndarray
         :return: None
@@ -491,6 +557,7 @@ class DroneDeliverer:
         self.drone.speed_flag = False
         self.drone.land()
         time.sleep(20)
+        drop_box(self.drone)
 
 
 
@@ -562,6 +629,24 @@ class MissionController:
         self.scanner.initialize_drone()  # это мы просто взлетаем
         scanned_results = self.scanner.execute_scan(self.emergency_event)
         print("Результаты сканирования:", scanned_results)
+
+        #Запус РТС
+        ip = "10.1.100.126"
+        targets = { # Если оставить пустым, то бот сразу отправится домой
+            "targ1" : [scanned_results["Wood 1"][0], scanned_results["Wood 1"][1]], # Для левой стороны
+            "targ2" : [scanned_results["Stone 1"][0], scanned_results["Stone 1"][1]],  # Для левой стороны
+        }
+        process1_bot = multiprocessing.Process(target=bot_process, daemon=True, args=[ip, name_l, targets, lines, obs_med, obs_large, home_point_l, sklads_l, vzaimosv])
+        process1_bot.start()
+
+        ip = "10.1.100.127"
+        targets = { # Если оставить пустым, то бот сразу отправится домой
+            "targ1" : [scanned_results["Wood 2"][0], scanned_results["Wood 2"][1]], # Для левой стороны
+            "targ2" : [scanned_results["Stone 2"][0], scanned_results["Stone 2"][1]],  # Для левой стороны
+        }
+        process2_bot = multiprocessing.Process(target=bot_process, daemon=True, args=[ip,  name_r, targets, lines, obs_med, obs_large, home_point_r, sklads_r, vzaimosv])
+        process2_bot.start()
+
         self.scanner.return_to_base()
         # Отбор только тех целей, которые указаны в self.targets
         matched_targets = {k: v for k, v in scanned_results.items() if k in self.targets}
@@ -577,4 +662,4 @@ class MissionController:
         print("Итоговые доставленные координаты:", delivered_results)
 
         # Завершение миссии – возврат на базу
-        # тут пропущен возврат на базу дрона
+        self.deliverer.return_to_base()
