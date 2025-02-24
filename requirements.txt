@@ -6,3 +6,4 @@ setuptools
 pion @ git+https://github.com/OnisOris/pion
 opencv-python
 pyzbar
+requests
