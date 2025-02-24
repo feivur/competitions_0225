@@ -4,12 +4,69 @@ from pyzbar.pyzbar import decode
 import math
 import threading
 from typing import Union, Optional
-# Импорт необходимых функций из модуля pion.functions
 from pion.functions import vector_reached, update_array
 import cv2
 import numpy as np
 from .drone_cv import *
 import time
+import requests
+
+
+def detect_object(drone: Pion, detect_code: str) -> None:
+    """
+    Функция вызывается, если вы задетектировали detect_code при сканировании или при доставке
+
+    :param drone: объект дрона
+    :type drone: Pion
+
+    :param detect_code: Строка со значением из qr кода
+    :type detect_code: str
+
+    :rtype: None
+    """
+    print("detect_object(), ip: ", drone.ip, "detect_code: ", detect_code)
+    try:
+        requests.get("http://10.1.100.6:31556/detect_object",
+                     params={
+                         "object": f"{detect_code.replace(" ", "_")}",
+                         "host": drone.ip[-3:]
+                     }).text
+    except:
+        print("Геймкор выключен")
+
+
+def get_box(drone: Pion) -> None:
+    """
+    Функция вызывается, если вы сели на qr код (для дрона доставщика)
+
+    :param drone: объект дрона
+    :type drone: Pion
+
+    :rtype: None
+    """
+    print("get_box(), ip: ", drone.ip)
+    try:
+        requests.get("http://10.1.100.6:31556/get_box",
+                     params={"host": drone.ip[-3:]}).text
+    except:
+        print("Геймкор выключен")
+
+
+def drop_box(drone: Pion) -> None:
+    """
+    Функция вызывается, если вы сбрасываете груз
+
+    :param drone: объект дрона
+    :type drone: Pion
+
+    :rtype: None
+    """
+    print("drop_box(), ip: ", drone.ip)
+    try:
+        requests.get("http://10.1.100.6:31556/drop_object",
+                     params={"host": drone.ip[-3:]}).text
+    except:
+        print("Геймкор выключен")
 
 
 def calculate_shift_global(points: np.ndarray,
@@ -40,6 +97,7 @@ def calculate_shift_global(points: np.ndarray,
     corrected_y = shift_x_m * math.sin(yaw) + shift_y_m * math.cos(yaw)
     return [corrected_x, corrected_y]
 
+
 def detect_qr_global_from_frame(drone: Pion,
                                 frame: np.ndarray,
                                 finished_targets: List[str],
@@ -65,6 +123,7 @@ def detect_qr_global_from_frame(drone: Pion,
                         error = np.array([-shift[0] + drone.xyz[0],
                                           shift[1] + drone.xyz[1], 0, 0])
                     key_errors[decoded_key] = error
+                    detect_object(drone=drone, detect_code=decoded_key)
                     print(f"Обнаружен: {decoded_key} = {error}")
                 drone.led_control(255, 0, 0, 0)
     return key_errors, frame
@@ -428,7 +487,9 @@ class DroneDeliverer:
                                                            threshold=threshold, time_break=15)
             print(f"Для '{target_key}' получены координаты: {final_coord}")
             self.drone.land()
-            time.sleep(30)
+            time.sleep(15)
+            get_box(drone=self.drone)
+            time.sleep(15)
             self.smart_take_off()
             if final_coord is not None:
                 break
@@ -449,7 +510,7 @@ class DroneDeliverer:
         """
         Для каждого QR-кода из словаря целей выполняется доставка:
         дрон уточняет позицию, приземляется с корректировкой и возвращается на базу.
-        
+
         :param targets: Словарь QR-кодов с исходными координатами, полученными сканером.
         :type targets: Dict[str, np.ndarray]
         :param coordinates_of_bases: Словарь с точками возврата для каждой цели.
@@ -468,7 +529,7 @@ class DroneDeliverer:
     def return_to_base(self) -> None:
         """
         Возвращает дрона-доставщика на базу.
-        
+
         :return: None
         """
         print(f"\n\nReturn to base: {self.base_coords}\n\n")
@@ -481,7 +542,7 @@ class DroneDeliverer:
     def return_to_point(self, point: np.ndarray) -> None:
         """
         Возвращает дрона-доставщика на заданную точку.
-        
+
         :param point: Таргетная точка возврата (x, y, z, yaw).
         :type point: np.ndarray
         :return: None
@@ -491,10 +552,7 @@ class DroneDeliverer:
         self.drone.speed_flag = False
         self.drone.land()
         time.sleep(20)
-
-
-
-
+        drop_box(self.drone)
 
 
 class MissionController:
@@ -577,4 +635,4 @@ class MissionController:
         print("Итоговые доставленные координаты:", delivered_results)
 
         # Завершение миссии – возврат на базу
-        # тут пропущен возврат на базу дрона
+        self.deliverer.return_to_base()
