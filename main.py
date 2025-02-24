@@ -8,8 +8,8 @@ if __name__ == "__main__":
     # Параметры для дрона-сканера
     scout_drone_1 = Pion(
         ip="127.0.0.1",
-        mavlink_port=8001,
-        logger=False,
+        mavlink_port=8000,
+        logger=True,
         dt=0.0,
         accuracy=0.08,
         count_of_checking_points=5
@@ -21,37 +21,39 @@ if __name__ == "__main__":
     h = 2
     offset = 1.4
     # зона сканирования - 2х2 м
-    x = -5
-    y = -5 + offset
+    x = -4.5
+    y = 4.5
     scan_points_list_1 = []
     # проход туда
-    while x < 6 or y < 6:
-        scan_points_list_1.append([x, y, h, 135])
-        x += offset * 2
-        y += offset * 2
+    while x < 4.5 or y > -4.5:
+        x += offset
+        y -= offset
+        if 5 > y > -5 and -5 < x < 5:
+            scan_points_list_1.append([x, y, h, 0])
         pass
     # проход обратно
     x,y,zz,aa = scan_points_list_1[ len(scan_points_list_1)-1 ] # смещаемся от последней точки
-    x += offset
-    y -= offset
-    while x > -6 or y > -6:
-        scan_points_list_1.append([x, y, h, 315])
-        x -= offset * 2
-        y -= offset * 2
+    x -= offset
+    while x > -4.5 or y < 4.5:
+        x -= offset
+        y += offset
+        if 5 > y > -5 and -5 < x < 5:
+            scan_points_list_1.append([x, y, h, 0])
         pass
 
     scan_points = np.array(scan_points_list_1)
+    print(scan_points)
 
     # Выбираем режим камеры: для симулятора можно использовать SocketCamera,
     # для реального дрона – RTSPCamera. Здесь пример с RTSP.
-    scanner_camera = RTSPCamera(rtsp_url=f'rtsp://{scout_drone_1.ip}:8554/front')
+    scanner_camera = SocketCamera(ip="127.0.0.1", port=18000)
     scanner_1 = DroneScanner(drone=scout_drone_1, base_coords=base_coords_scanner,
                              scan_points=scan_points, camera=scanner_camera, show=True)
 
     # Параметры для дрона-доставщика
     delivery_drone = Pion(
-        ip="10.1.100.211",
-        mavlink_port=5656,
+        ip="127.0.0.1",
+        mavlink_port=8001,
         logger=False,
         dt=0.0,
         accuracy=0.08,
@@ -64,8 +66,9 @@ if __name__ == "__main__":
         (0, 0, 0, 0),
         (0, 0, 0, 0)
     ]
+
     # Для доставщика также можно передать камеру; если не передана, будет создан RTSPCamera по умолчанию.
-    deliverer_camera = RTSPCamera(rtsp_url=f'rtsp://{delivery_drone.ip}:8554/front')
+    deliverer_camera = SocketCamera(ip="127.0.0.1", port=18001)
     deliverer = DroneDeliverer(drone=delivery_drone, base_coords=base_coords_deliverer,
                                delivery_points=delivery_points, camera=deliverer_camera,
                                mission_keys=["Box 2 2", "Box 2 1"], show=True)
@@ -79,5 +82,5 @@ if __name__ == "__main__":
     targets = ["Box 2 2", "Box 2 1"]
 
     # Создание MissionController и запуск миссии
-    mission_controller = MissionController(scanner, deliverer, coordinates_of_bases, targets)
+    mission_controller = MissionController(scanner_1, deliverer, coordinates_of_bases, targets)
     mission_controller.run_mission()

@@ -12,10 +12,11 @@ from .drone_cv import *
 import time
 import requests
 
-#Для РТС
+# Для РТС
 import multiprocessing
-from omegabot_poligon77 import * #Необходимо утсановить пакет из README
+from omegabot_poligon77 import *  # Необходимо утсановить пакет из README
 from RTS_code import *
+
 
 def detect_object(drone: Pion, detect_code: str) -> None:
     """
@@ -52,7 +53,7 @@ def get_box(drone: Pion) -> None:
     print("get_box(), ip: ", drone.ip)
     try:
         requests.get("http://10.1.100.6:31556/get_box",
-                 params={"host": drone.ip[-3:]}).text
+                     params={"host": drone.ip[-3:]}).text
     except:
         print("Геймкор выключен")
 
@@ -66,10 +67,10 @@ def drop_box(drone: Pion) -> None:
 
     :rtype: None
     """
-    print("drop_box(), ip: ", drone.ip) 
+    print("drop_box(), ip: ", drone.ip)
     try:
         requests.get("http://10.1.100.6:31556/drop_object",
-                 params={"host": drone.ip[-3:]}).text
+                     params={"host": drone.ip[-3:]}).text
     except:
         print("Геймкор выключен")
 
@@ -101,6 +102,7 @@ def calculate_shift_global(points: np.ndarray,
     corrected_x = shift_x_m * math.cos(yaw) - shift_y_m * math.sin(yaw)
     corrected_y = shift_x_m * math.sin(yaw) + shift_y_m * math.cos(yaw)
     return [corrected_x, corrected_y]
+
 
 def detect_qr_global_from_frame(drone: Pion,
                                 frame: np.ndarray,
@@ -246,7 +248,6 @@ def move_to_target(drone: Pion,
     return finished_targets, final_coordinate
 
 
-
 class DroneScanner:
     """
     Класс для сканирования окружающей среды дроном с целью обнаружения QR-кодов.
@@ -275,8 +276,9 @@ class DroneScanner:
         """
         Инициализирует дрона: выполняет арминг, взлёт и устанавливает режим скорости.
         """
+        print("initialize_drone")
         self.smart_take_off()
-        time.sleep(7)
+        time.sleep(1)
 
     def smart_take_off(self) -> None:
         """
@@ -288,7 +290,7 @@ class DroneScanner:
             self.drone.arm()
             time.sleep(0.5)
             self.drone.takeoff()
-        time.sleep(7)
+        time.sleep(3)
         print("Smart take off is ending")
 
     def detect_qr(self, finished_targets: Optional[List[str]] = None,
@@ -316,6 +318,7 @@ class DroneScanner:
         Перемещает дрона-сканер к заданной точке и собирает обнаруженные QR-коды.
         При возникновении экстренной ситуации дрон возвращается на базу, ждёт нормализации и затем возобновляет миссию.
         """
+        print(f"process_mission_point {target_point}")
         finished_targets = list(self.unique_points.keys())
         self.drone.speed_flag = False
         while True:
@@ -352,16 +355,25 @@ class DroneScanner:
         self.drone.speed_flag = False
 
     def execute_scan(self, emergency_event: threading.Event) -> Dict[str, np.ndarray]:
+        print("scaner: start")
         """
         Выполняет миссию сканирования: дрон перемещается по заданным точкам, собирает QR-коды и возвращается на базу.
         """
-        self.initialize_drone()
-        self.drone.goto_from_outside(*self.scan_points[0])
+        print(f"scaner: go to start {self.scan_points[0]}")
+        x, y, z, a = self.scan_points[0]
+        #self.drone.goto_from_outside(x, y, z, 0, 0.5)
+        self.process_mission_point((x, y), False, emergency_event)
         self.drone.speed_flag = False
         for point in self.scan_points[1:]:
-            pass
-        # Миссию сканирования вы должны придумать сами
-        pass
+            print(f"scaner: go to {point}")
+            self.drone.speed_flag = True
+            x, y, z, a = point
+            #self.drone.goto_from_outside(x, y, z, 0, 0.5)
+            #self.drone.speed_flag = False
+            #time.sleep(1)
+            self.process_mission_point((x, y), False, emergency_event)
+        return dict
+
     def return_to_base(self) -> None:
         """
         Возвращает дрона-сканер на базу.
@@ -560,10 +572,6 @@ class DroneDeliverer:
         drop_box(self.drone)
 
 
-
-
-
-
 class MissionController:
     def __init__(self, scanner: DroneScanner, deliverer: DroneDeliverer,
                  coordinates_of_bases: dict, targets: list):
@@ -622,30 +630,36 @@ class MissionController:
              дрон возвращается на базу, ждет нормализации и затем возобновляет миссию с сохраненной точки.
           5. По завершении миссии дрон возвращается на базу.
         """
+        print("run_mission")
+
         # Запуск мониторинга погоды в отдельном потоке
-        self.weather_thread.start()
+        ## self.weather_thread.start()
 
         # Выполнение сканирования
         self.scanner.initialize_drone()  # это мы просто взлетаем
         scanned_results = self.scanner.execute_scan(self.emergency_event)
         print("Результаты сканирования:", scanned_results)
 
-        #Запус РТС
-        ip = "10.1.100.126"
-        targets = { # Если оставить пустым, то бот сразу отправится домой
-            "targ1" : [scanned_results["Wood 1"][0], scanned_results["Wood 1"][1]], # Для левой стороны
-            "targ2" : [scanned_results["Stone 1"][0], scanned_results["Stone 1"][1]],  # Для левой стороны
+        # Запус РТС
+        ip = "127.0.0.1"
+        targets = {  # Если оставить пустым, то бот сразу отправится домой
+            "targ1": [scanned_results["Wood 1"][0], scanned_results["Wood 1"][1]],  # Для левой стороны
+            "targ2": [scanned_results["Stone 1"][0], scanned_results["Stone 1"][1]],  # Для левой стороны
         }
-        process1_bot = multiprocessing.Process(target=bot_process, daemon=True, args=[ip, name_l, targets, lines, obs_med, obs_large, home_point_l, sklads_l, vzaimosv])
-        process1_bot.start()
+        process1_bot = multiprocessing.Process(target=bot_process, daemon=True,
+                                               args=[ip, name_l, targets, lines, obs_med, obs_large, home_point_l,
+                                                     sklads_l, vzaimosv])
+        ##process1_bot.start()
 
         ip = "10.1.100.127"
-        targets = { # Если оставить пустым, то бот сразу отправится домой
-            "targ1" : [scanned_results["Wood 2"][0], scanned_results["Wood 2"][1]], # Для левой стороны
-            "targ2" : [scanned_results["Stone 2"][0], scanned_results["Stone 2"][1]],  # Для левой стороны
+        targets = {  # Если оставить пустым, то бот сразу отправится домой
+            "targ1": [scanned_results["Wood 2"][0], scanned_results["Wood 2"][1]],  # Для левой стороны
+            "targ2": [scanned_results["Stone 2"][0], scanned_results["Stone 2"][1]],  # Для левой стороны
         }
-        process2_bot = multiprocessing.Process(target=bot_process, daemon=True, args=[ip,  name_r, targets, lines, obs_med, obs_large, home_point_r, sklads_r, vzaimosv])
-        process2_bot.start()
+        process2_bot = multiprocessing.Process(target=bot_process, daemon=True,
+                                               args=[ip, name_r, targets, lines, obs_med, obs_large, home_point_r,
+                                                     sklads_r, vzaimosv])
+        ##process2_bot.start()
 
         self.scanner.return_to_base()
         # Отбор только тех целей, которые указаны в self.targets
