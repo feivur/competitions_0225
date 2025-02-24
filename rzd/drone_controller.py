@@ -4,6 +4,7 @@ from pyzbar.pyzbar import decode
 import math
 import threading
 from typing import Union, Optional
+# Импорт необходимых функций из модуля pion.functions
 from pion.functions import vector_reached, update_array
 import cv2
 import numpy as np
@@ -11,11 +12,15 @@ from .drone_cv import *
 import time
 import requests
 
+#Для РТС
+import multiprocessing
+from omegabot_poligon77 import * #Необходимо утсановить пакет из README
+from RTS_code import *
 
 def detect_object(drone: Pion, detect_code: str) -> None:
     """
     Функция вызывается, если вы задетектировали detect_code при сканировании или при доставке
-
+    
     :param drone: объект дрона
     :type drone: Pion
 
@@ -38,7 +43,7 @@ def detect_object(drone: Pion, detect_code: str) -> None:
 def get_box(drone: Pion) -> None:
     """
     Функция вызывается, если вы сели на qr код (для дрона доставщика)
-
+    
     :param drone: объект дрона
     :type drone: Pion
 
@@ -47,7 +52,7 @@ def get_box(drone: Pion) -> None:
     print("get_box(), ip: ", drone.ip)
     try:
         requests.get("http://10.1.100.6:31556/get_box",
-                     params={"host": drone.ip[-3:]}).text
+                 params={"host": drone.ip[-3:]}).text
     except:
         print("Геймкор выключен")
 
@@ -55,16 +60,16 @@ def get_box(drone: Pion) -> None:
 def drop_box(drone: Pion) -> None:
     """
     Функция вызывается, если вы сбрасываете груз
-
+    
     :param drone: объект дрона
     :type drone: Pion
 
     :rtype: None
     """
-    print("drop_box(), ip: ", drone.ip)
+    print("drop_box(), ip: ", drone.ip) 
     try:
         requests.get("http://10.1.100.6:31556/drop_object",
-                     params={"host": drone.ip[-3:]}).text
+                 params={"host": drone.ip[-3:]}).text
     except:
         print("Геймкор выключен")
 
@@ -96,7 +101,6 @@ def calculate_shift_global(points: np.ndarray,
     corrected_x = shift_x_m * math.cos(yaw) - shift_y_m * math.sin(yaw)
     corrected_y = shift_x_m * math.sin(yaw) + shift_y_m * math.cos(yaw)
     return [corrected_x, corrected_y]
-
 
 def detect_qr_global_from_frame(drone: Pion,
                                 frame: np.ndarray,
@@ -242,6 +246,7 @@ def move_to_target(drone: Pion,
     return finished_targets, final_coordinate
 
 
+
 class DroneScanner:
     """
     Класс для сканирования окружающей среды дроном с целью обнаружения QR-кодов.
@@ -372,7 +377,7 @@ class DroneScanner:
     def scanned_qr(self) -> Dict[str, np.ndarray]:
         """
         Возвращает усреднённые координаты всех обнаруженных QR-кодов.
-        
+
         :return: Словарь, где ключ – код, значение – усреднённая координата.
         :rtype: Dict[str, np.ndarray]
         """
@@ -555,6 +560,10 @@ class DroneDeliverer:
         drop_box(self.drone)
 
 
+
+
+
+
 class MissionController:
     def __init__(self, scanner: DroneScanner, deliverer: DroneDeliverer,
                  coordinates_of_bases: dict, targets: list):
@@ -620,6 +629,24 @@ class MissionController:
         self.scanner.initialize_drone()  # это мы просто взлетаем
         scanned_results = self.scanner.execute_scan(self.emergency_event)
         print("Результаты сканирования:", scanned_results)
+
+        #Запус РТС
+        ip = "10.1.100.126"
+        targets = { # Если оставить пустым, то бот сразу отправится домой
+            "targ1" : [scanned_results["Wood 1"][0], scanned_results["Wood 1"][1]], # Для левой стороны
+            "targ2" : [scanned_results["Stone 1"][0], scanned_results["Stone 1"][1]],  # Для левой стороны
+        }
+        process1_bot = multiprocessing.Process(target=bot_process, daemon=True, args=[ip, name_l, targets, lines, obs_med, obs_large, home_point_l, sklads_l, vzaimosv])
+        process1_bot.start()
+
+        ip = "10.1.100.127"
+        targets = { # Если оставить пустым, то бот сразу отправится домой
+            "targ1" : [scanned_results["Wood 2"][0], scanned_results["Wood 2"][1]], # Для левой стороны
+            "targ2" : [scanned_results["Stone 2"][0], scanned_results["Stone 2"][1]],  # Для левой стороны
+        }
+        process2_bot = multiprocessing.Process(target=bot_process, daemon=True, args=[ip,  name_r, targets, lines, obs_med, obs_large, home_point_r, sklads_r, vzaimosv])
+        process2_bot.start()
+
         self.scanner.return_to_base()
         # Отбор только тех целей, которые указаны в self.targets
         matched_targets = {k: v for k, v in scanned_results.items() if k in self.targets}
