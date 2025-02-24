@@ -57,6 +57,7 @@ if __name__ == "__main__":
 ```
 
 ## Пример получения статуса погоды
+Это пример того, как со спутника забирать картинку с цветовой индикацией погоды
 
 ```python
 import requests
@@ -94,3 +95,78 @@ else:
 
 ## Схема площадки
 ![окно установки 1](./img/scheme.jpg)
+
+# Важные замечания
+
+Функция вызывается, если вы за детектировали detect_code при сканировании или при доставке.
+
+```python
+
+def detect_object(drone: Pion, detect_code: str) -> None:
+    """
+    Функция вызывается, если вы за детектировали detect_code при сканировании или при доставке
+
+    :param drone: объект дрона
+    :type drone: Pion
+
+    :param detect_code: Строка со значением из qr кода
+    :type detect_code: str
+
+    :rtype: None
+    """
+    print("detect_object(), ip: ", drone.ip, "detect_code: ", detect_code)
+    try:
+        requests.get("http://10.1.100.6:31556/detect_object",
+                     params={
+                         "object": f"{detect_code.replace(" ", "_")}",
+                         "host": drone.ip[-3:]
+                     }).text
+    except:
+        print("Геймкор выключен")
+```
+
+
+Функция вызывается, если вы сели на qr код (для дрона доставщика).
+
+```python
+
+def get_box(drone: Pion) -> None:
+    """
+    Функция вызывается, если вы сели на qr код (для дрона доставщика)
+
+    :param drone: объект дрона
+    :type drone: Pion
+
+    :rtype: None
+    """
+    print("get_box(), ip: ", drone.ip)
+    try:
+        requests.get("http://10.1.100.6:31556/get_box",
+                     params={"host": drone.ip[-3:]}).text
+    except:
+        print("Геймкор выключен")
+```
+
+Функция вызывается, если вы сбрасываете груз.
+
+```python
+def drop_box(drone: Pion) -> None:
+    """
+    Функция вызывается, если вы сбрасываете груз
+
+    :param drone: объект дрона
+    :type drone: Pion
+
+    :rtype: None
+    """
+    print("drop_box(), ip: ", drone.ip)
+    try:
+        requests.get("http://10.1.100.6:31556/drop_object",
+                     params={"host": drone.ip[-3:]}).text
+    except:
+        print("Геймкор выключен")
+```
+
+Данные примеры уже добавлены в код и вы можете их использовать у себя. 
+
+Это важная часть, которая влияет на зачисление баллов.
